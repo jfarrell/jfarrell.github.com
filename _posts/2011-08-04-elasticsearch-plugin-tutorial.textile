@@ -1,0 +1,264 @@
+---
+layout: post
+title: "Creating an Elasticsearch Plugin"
+---
+
+h1. {{ page.title }}
+
+Elasticsearch is a great search engine built on top of <a href="http://lucene.apache.org/">Apache Lucene</a>. We came across the need to add new functionality and did not want to fork Elasticsearch for this. Luckily Elasticsearch comes with a plugin framework. We all ready leverage this framework to use the <a href="http://thrift.apache.org">Apache Thrift</a> transport. There was no documentation on how to create a plugin so after digging around in the code a little we where able to to create our own plugin. 
+
+Here is a tutorial on creating a plugin and installing it into Elasticsearch.
+<hr>
+
+* Setup the maven project
+{% highlight bash %}
+mvn archetype:generate -B -DarchetypeArtifactId=maven-archetype-quickstart -DgroupId=org.elasticsearch.plugin.awesomeplugin -DartifactId=AwesomePlugin -DpackageName=org.elasticsearch.plugin.awesomeplugin.AwesomePlugin -Dversion=1.0
+{% endhighlight %}
+
+* Create the elasticsearch plugin properties file in src/main/resources/es-plugin.properties
+{% highlight java %}
+plugin=${project.groupId}.${project.artifactId}
+{% endhighlight %}
+
+* Modify the pom.xml to build the plugin and package it correctly 
+{% highlight xml %}
+<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>org.elasticsearch.plugin.awesomeplugin</groupId>
+	<artifactId>AwesomePlugin</artifactId>
+	<packaging>jar</packaging>
+	<version>1.0</version>
+	<name>AwesomePlugin</name>
+	<url>http://maven.apache.org</url>
+	<build>
+		<plugins>
+			<!-- Add/Edit items in META-INF/MANIFEST.MF -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>2.3</version>
+				<configuration>
+					<finalName>elasticsearch-${project.name}-${elasticsearch.version}</finalName>
+				</configuration>
+			</plugin>
+			<!-- Copy dependencies into lib folder -->
+			<!-- To see full classpath use  mvn dependency:build-classpath -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<version>2.2</version>
+				<executions>
+					<execution>
+						<id>copy-dependencies</id>
+						<phase>package</phase>
+						<goals>
+							<goal>copy-dependencies</goal>
+						</goals>
+						<configuration>
+							<outputDirectory>${project.build.directory}/lib</outputDirectory>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- Skip Surefire tests -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>2.8</version>
+				<configuration>
+					<skipTests>true</skipTests>
+					<additionalClasspathElements>
+						<additionalClasspathElement>${project.build.directory}/classes/conf</additionalClasspathElement>
+						<additionalClasspathElement>${project.build.directory}/lib</additionalClasspathElement>
+					</additionalClasspathElements>
+				</configuration>
+			</plugin>
+			<!-- Generate the release zip file (run during package step) -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<version>2.2.1</version>
+				<configuration>
+					<finalName>elasticsearch-${project.name}-${elasticsearch.version}</finalName>
+					<appendAssemblyId>false</appendAssemblyId>
+					<outputDirectory>${project.build.directory}/release/</outputDirectory>
+					<descriptors>
+						<descriptor>assembly/release.xml</descriptor>
+					</descriptors>
+				</configuration>
+				<executions>
+					<execution>
+						<id>generate-release-plugin</id>
+						<phase>package</phase>
+						<goals>
+							<goal>single</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>	
+		</plugins>
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+				<filtering>true</filtering>
+				<includes>
+					<include>**/*.properties</include>
+				</includes>
+			</resource>
+		</resources>
+	</build>
+	<properties>
+		<elasticsearch.version>0.17.1</elasticsearch.version>
+	</properties>
+	<dependencies>
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>4.8.2</version>
+		</dependency>
+		<dependency>
+			<groupId>org.elasticsearch</groupId>
+			<artifactId>elasticsearch</artifactId>
+			<version>${elasticsearch.version}</version>
+		</dependency>
+	</dependencies>
+	<repositories>
+		<repository>
+			<id>sonatype</id>
+			<name>Sonatype Groups</name>
+			<url>https://oss.sonatype.org/content/groups/public/</url>
+		</repository>
+	</repositories>
+</project>
+{% endhighlight %}
+
+
+* Create the release assembly file in assembly/release.xml
+{% highlight xml %}
+<?xml version="1.0"?>
+<assembly>
+	<id>bin</id>
+	<formats>
+		<format>zip</format>
+	</formats>
+	<includeBaseDirectory>false</includeBaseDirectory>
+	<dependencySets>
+		<dependencySet>
+			<unpack>false</unpack>
+			<outputDirectory>/</outputDirectory>
+			<useProjectArtifact>false</useProjectArtifact>
+			<useTransitiveFiltering>true</useTransitiveFiltering>
+			<excludes>
+				<exclude>org.elasticsearch:elasticsearch</exclude>
+				<exclude>junit:junit</exclude>
+			</excludes>
+		</dependencySet>
+	</dependencySets>
+	<fileSets>
+		<fileSet>
+			<directory>${project.build.directory}/</directory>
+			<outputDirectory>/</outputDirectory>
+			<includes>
+				<include>elasticsearch-${project.name}-${elasticsearch.version}.jar</include>
+			</includes>
+		</fileSet>
+	</fileSets>
+</assembly>
+{% endhighlight %}
+
+
+* Add the projects elasticsearch Module definition class
+
+<nojekyll>
+{% highlight java %}
+package org.elasticsearch.awesomeplugin;
+
+import org.elasticsearch.common.inject.AbstractModule;
+import org.elasticsearch.common.settings.Settings;
+
+public class AwesomePluginModule extends AbstractModule {
+	private final Settings settings;
+
+	public AwesomePluginModule(Settings settings) {
+		this.settings = settings;
+	}
+
+	@Override
+	protected void configure() {
+		bind(AwesomePluginService.class).asEagerSingleton();
+	}
+}
+{% endhighlight %}
+</nojekyll>
+
+* Add the projects elasticsearch service entry point
+
+<nojekyll>
+{% highlight java %}
+package org.elasticsearch.awesomeplugin;
+
+import org.elasticsearch.ElasticSearchException;
+import org.elasticsearch.common.component.AbstractLifecycleComponent;
+import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.settings.Settings;
+
+public class AwesomePluginService extends AbstractLifecycleComponent<AwesomePluginService>
+{
+	@Inject
+	public AwesomePluginService(Settings settings, SettingsFilter settingsFilter) {
+		super(settings);
+	}
+
+	@Override
+	protected void doClose() throws ElasticSearchException {		
+	}
+
+	@Override
+	protected void doStart() throws ElasticSearchException {
+		// read some settings
+		String host = componentSettings.get("host", "localhost");
+		int port = componentSettings.getAsInt("port", 12345);
+	}
+
+	@Override
+	protected void doStop() throws ElasticSearchException {
+	}
+}
+{% endhighlight %}
+</nojekyll>
+
+* You project should now look like this
+{% highlight bash %}
+AwesomePlugin
+└── assembly
+|	└── release.xml
+├── pom.xml
+└── src
+    ├── main
+    │   ├── java
+    │   │   └── org
+    │   │       └── elasticsearch
+    │   │           ├── awesomeplugin
+    │   │           │   ├── AwesomePluginModule.java
+    │   │           │   ├── AwesomePluginService.java
+    │   │           │   └── Your Files Here
+    │   │           └── plugin
+    │   │               └── awesomeplugin
+    │   │                   └── AwesomePlugin.java
+    │   └── resources
+    │       └── es-plugin.properties
+    └── test
+        └── java
+            └── org
+                └── elasticsearch
+                    └── plugin
+                        └── awesomeplugin
+                            └── AwesomePluginTest.java
+{% endhighlight %}
+
+* Invoking the maven package command will generate the plugin in the target/release folder in a zip file bundled with any dependencies you may have. To install the plugin run the elasticsearch plugin application
+{% highlight bash %}
+mvn clean package
+elaseticsearch-0.17.1/bin/plugin -url file:./target/release/elasticsearch-awesome-plugin-0.17.1.zip -install awesome-plugin
+{% endhighlight %}

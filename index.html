@@ -1,0 +1,9 @@
+---
+layout: default
+title: 
+---
+{% for post in site.posts limit:5 %}
+  <div class="post">
+  {{ post.content }}
+  </div>
+{% endfor %}
